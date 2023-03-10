@@ -19,15 +19,38 @@ async fn main() {
 }
 
 async fn process(socket: TcpStream) {
-    // the connection lets us read/write redis **frames** instead of
-    // byte streams. The connection type is defined in mini-redis
+    use mini_redis::Command::{self, Get, Set};
+    use std::collections::HashMap;
+
+    // A hashmap is used to store data
+    let mut db = HashMap::new();
+
+    // Connection, provided by mini-redis, handles parsing frames from
+    // the socket
     let mut connection = Connection::new(socket);
 
-    if let Some(frame) = connection.read_frame().await.unwrap() {
-        println!("GOT: {:?}", frame);
+    // use read_frame to receive a command from the connection
+    while let Some(frame) = connection.read_frame().await.unwrap() {
+        let response = match Command::from_frame(frame).unwrap() {
+            Set(cmd) => {
+                // the value is stored as Vec<u8>
+                db.insert(cmd.key().to_string(), cmd.value().to_vec());
+                Frame::Simple("ok".to_string())
+            }
+            Get(cmd) => {
+                if let Some(value) = db.get(cmd.key()) {
+                    // Frame::Bulk expects data to be of type bytes. this
+                    // type will be covered later in the tutorial. For now,
+                    // &Vec<u8> is converted to Bytes using into()
+                    Frame::Bulk(value.clone().into())
+                } else {
+                    Frame::Null
+                }
+            }
+            cmd => panic!("unimplemented {:?}", cmd),
+        };
 
-        // respond with an error
-        let response = Frame::Error("unimplemented".to_string());
+        // write the response to the client
         connection.write_frame(&response).await.unwrap();
     }
 }
